@@ -21,22 +21,53 @@ def main():
     
     # merge
     data_frame = steam_200k.merge(steam, left_on='game_title', right_on='name')
-    data_frame = data_frame.drop(columns=['behavior', 'name', 'average_playtime', 'appid', 'english', 'steamspy_tags', 'achievements', 'positive_ratings', 'negative_ratings', 'median_playtime', 'owners'])
+    # data_frame = data_frame.apply(process_categories, axis=1)
+    split_categories_into_columns_and_populate_with_1_or_0(data_frame)
+    data_frame = process_developer(data_frame, 'developer')
+
+
+    data_frame = data_frame.drop(columns=['behavior', 'name', 'developer', 'categories', 'average_playtime', 'appid', 'english', 'steamspy_tags', 'achievements', 'positive_ratings', 'negative_ratings', 'median_playtime', 'owners'])
 
     avg_playtime = data_frame.groupby('game_title')['hours_played'].mean()
     data_frame['avg_play_time'] = data_frame.apply(lambda x: avg_playtime[x['game_title']], axis=1)
     data_frame['avg_play_time'] = data_frame['avg_play_time'].round()
     # data_frame['avg_play_time'] = data_frame['avg_play_time'].astype(int)
     data_frame = remove_rows_where_avg_playtime_is_zero(data_frame)
+
     create_rating_based_on_hoursplayed(data_frame)
     # print(data_frame.nunique())
-    print(data_frame.head(100))
-    plot_utils.plotPerColumnDistribution(data_frame, 10, 5)
+    # print(data_frame.head(100))
+    # plot_utils.plotPerColumnDistribution(data_frame, 10, 5)
     # print_avg_playtime(data_frame)
     # Save the DataFrame to a CSV file
-    # data_frame.to_csv('./data/cleaned_data.csv', index=False)
+    data_frame.to_csv('./data/cleaned_data.csv', index=False)
 
+def split_categories_into_columns_and_populate_with_1_or_0(data_frame):
+    all_categories = set()
+
+    for row in data_frame['categories']:
+        categories = row.split(';')
+        all_categories.update(categories)
+
+    # Iterate through the dataframe and create a new column for each category
+    for category in all_categories:
+        data_frame[f'category_{category}'] = 0
+
+    # Iterate through the dataframe and set the value of each category column to 1 if the row has that category
+    for index, row in data_frame.iterrows():
+        categories = row['categories'].split(';')
+        for category in categories:
+            data_frame.loc[index, f'category_{category}'] = 1
+
+def process_developer(df, developer_column):
+    for index, row in df.iterrows():
+        developer = row[developer_column]
+        if ';' in developer:
+            developer = developer.split(';')[0]
+            df.loc[index, developer_column] = developer
     
+    return df
+
 
 def create_rating_based_on_hoursplayed(df):
     df['rating'] = df.apply(lambda x: (x['hours_played'] / x['avg_play_time']) * 10, axis=1)
