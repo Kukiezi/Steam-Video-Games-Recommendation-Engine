@@ -4,6 +4,8 @@ import data_cleaner
 import data_reader
 import utils.print_utils as print_utils
 import pandas as pd
+from fuzzywuzzy import fuzz
+from fuzzywuzzy import process
 
 # plot_utils.plotPerColsumnDistribution(df1, 10, 5)
 
@@ -20,7 +22,8 @@ def main():
     steam_200k = steam_200k.loc[steam_200k['behavior'] != 'purchase']
     
     # merge
-    data_frame = steam_200k.merge(steam, left_on='game_title', right_on='name')
+    # data_frame = steam_200k.merge(steam, left_on=lambda x: is_similarity_above_90(x, 'game_title', 'name'), right_on=lambda x: is_similarity_above_90(x, 'name', 'game_title'))
+    data_frame = merge_dataframes(steam_200k, steam)
     # data_frame = data_frame.apply(process_categories, axis=1)
     split_categories_into_columns_and_populate_with_1_or_0(data_frame)
     data_frame = process_developer(data_frame, 'developer')
@@ -98,6 +101,39 @@ def prepare_data():
     print(data_frame.nunique())
     # Save the DataFrame to a CSV file
     # data_frame.to_csv('./data/cleaned_data.csv', index=False)
+
+
+def merge_dataframes(steam_200k, steam):
+    # Create a function to get the best match
+    def get_best_match(game_title):
+        # Get the best match in df2
+        best_match = process.extractOne(game_title, steam['name'])
+        return best_match[1]
+
+    # Set the threshold for the similarity
+    threshold = 90  
+    # Create an empty list to store the matches
+
+    # Check if the match is above the threshold
+    if best_match[1] >= threshold:
+        # If it is, add the index of the match to the list
+        matches.append((index1, best_match[2]))
+
+    # Use the list of matches to merge the dataframes
+    merged_df = pd.merge(steam_200k, steam, left_on='index', right_on='index', suffixes=('_steam_200k', '_steam'), how='inner', indicator=True, list=matches)
+    return merged_df
+
+# function that accepts 2 strings, normalizes them and returns the similarity score
+def is_similarity_above_90(row, left_column, right_column):
+    left_value = row[left_column]
+    right_value = row[right_column]
+    return fuzz.ratio(left_value, right_value) >= 90
+
+def main2():
+    print(fuzz.ratio('Counter-Strike Global Offensive', 'Counter-Strike: Global Offensive'))
+    # data_frame = pd.read_csv('./data/cleaned_data.csv', delimiter=',')
+    # data_frame.dataframeName = 'data'
+    # print(data_frame['game_title'].nunique())
 
 if __name__ == '__main__':
     main()
