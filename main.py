@@ -6,6 +6,7 @@ import utils.print_utils as print_utils
 import pandas as pd
 from fuzzywuzzy import fuzz
 from fuzzywuzzy import process
+import difflib
 
 # plot_utils.plotPerColsumnDistribution(df1, 10, 5)
 
@@ -22,14 +23,37 @@ def main():
     steam_200k = steam_200k.loc[steam_200k['behavior'] != 'purchase']
     
     # merge
-    # data_frame = steam_200k.merge(steam, left_on=lambda x: is_similarity_above_90(x, 'game_title', 'name'), right_on=lambda x: is_similarity_above_90(x, 'name', 'game_title'))
-    data_frame = merge_dataframes(steam_200k, steam)
+    # data_frame = steam_200k.merge(steam, left_on='game_title', right_on='name')
+    data_frame = pd.DataFrame(columns=steam_200k.columns.tolist() + steam.columns.tolist())
+    # Iterate over the rows of steam_200k
+    for index, row in steam_200k.iterrows():
+        # Get the game_title of the current row
+        game_title = row['game_title']
+        print(index)
+        # Find the row in steam with a name that is most similar to game_title
+        # using the difflib library
+        best_match = difflib.get_close_matches(game_title, steam['name'], n=1, cutoff=0.5)
+        
+        # If a close match was found
+        if best_match:
+            # Get the index of the row with the best match
+            best_match_index = steam.index[steam['name'] == best_match[0]].tolist()[0]
+            
+            # Get the row with the best match
+            best_match_row = steam.iloc[best_match_index]
+            
+            # Append a new row to data_frame with the data from the current row of steam_200k
+            # and the data from the best match row of steam
+            data_frame = data_frame.append(pd.Series(row.tolist() + best_match_row.tolist(), index=data_frame.columns), ignore_index=True)
+
+    # data_frame = merge_dataframes(steam_200k, steam)
     # data_frame = data_frame.apply(process_categories, axis=1)
+
     split_categories_into_columns_and_populate_with_1_or_0(data_frame)
     data_frame = process_developer(data_frame, 'developer')
+    split_genres_into_columns_and_populate_with_1_or_0(data_frame)
+    split_platforms_into_columns_and_populate_with_1_or_0(data_frame)
 
-
-    data_frame = data_frame.drop(columns=['behavior', 'name', 'developer', 'categories', 'average_playtime', 'appid', 'english', 'steamspy_tags', 'achievements', 'positive_ratings', 'negative_ratings', 'median_playtime', 'owners'])
 
     avg_playtime = data_frame.groupby('game_title')['hours_played'].mean()
     data_frame['avg_play_time'] = data_frame.apply(lambda x: avg_playtime[x['game_title']], axis=1)
@@ -38,12 +62,14 @@ def main():
     data_frame = remove_rows_where_avg_playtime_is_zero(data_frame)
 
     create_rating_based_on_hoursplayed(data_frame)
+    data_frame = data_frame.drop(columns=['avg_play_time', 'required_age', 'price', 'publisher', 'developer', 'release_date', 'hours_played', 'behavior', 'name', 'categories', 'genres', 'platforms', 'average_playtime', 'appid', 'english', 'steamspy_tags', 'achievements', 'positive_ratings', 'negative_ratings', 'median_playtime', 'owners'])
+
     # print(data_frame.nunique())
     # print(data_frame.head(100))
     # plot_utils.plotPerColumnDistribution(data_frame, 10, 5)
     # print_avg_playtime(data_frame)
     # Save the DataFrame to a CSV file
-    data_frame.to_csv('./data/cleaned_data.csv', index=False)
+    data_frame.to_csv('./data/cleaned_data2.csv', index=False)
 
 def split_categories_into_columns_and_populate_with_1_or_0(data_frame):
     all_categories = set()
@@ -61,6 +87,41 @@ def split_categories_into_columns_and_populate_with_1_or_0(data_frame):
         categories = row['categories'].split(';')
         for category in categories:
             data_frame.loc[index, f'category_{category}'] = 1
+
+def split_genres_into_columns_and_populate_with_1_or_0(data_frame):
+    all_categories = set()
+
+    for row in data_frame['genres']:
+        categories = row.split(';')
+        all_categories.update(categories)
+
+    # Iterate through the dataframe and create a new column for each category
+    for category in all_categories:
+        data_frame[f'genre_{category}'] = 0
+
+    # Iterate through the dataframe and set the value of each category column to 1 if the row has that category
+    for index, row in data_frame.iterrows():
+        categories = row['genres'].split(';')
+        for category in categories:
+            data_frame.loc[index, f'genre_{category}'] = 1
+
+
+def split_platforms_into_columns_and_populate_with_1_or_0(data_frame):
+    all_categories = set()
+
+    for row in data_frame['platforms']:
+        categories = row.split(';')
+        all_categories.update(categories)
+
+    # Iterate through the dataframe and create a new column for each category
+    for category in all_categories:
+        data_frame[f'platform_{category}'] = 0
+
+    # Iterate through the dataframe and set the value of each category column to 1 if the row has that category
+    for index, row in data_frame.iterrows():
+        categories = row['platforms'].split(';')
+        for category in categories:
+            data_frame.loc[index, f'platform_{category}'] = 1
 
 def process_developer(df, developer_column):
     for index, row in df.iterrows():
@@ -130,10 +191,11 @@ def is_similarity_above_90(row, left_column, right_column):
     return fuzz.ratio(left_value, right_value) >= 90
 
 def main2():
-    print(fuzz.ratio('Counter-Strike Global Offensive', 'Counter-Strike: Global Offensive'))
-    # data_frame = pd.read_csv('./data/cleaned_data.csv', delimiter=',')
-    # data_frame.dataframeName = 'data'
+    # print(fuzz.ratio('Counter-Strike Global Offensive', 'Counter-Strike: Global Offensive'))
+    data_frame = pd.read_csv('./data/cleaned_data2.csv', delimiter=',')
+    data_frame.dataframeName = 'data'
+    print(data_frame.count())
     # print(data_frame['game_title'].nunique())
 
 if __name__ == '__main__':
-    main()
+    main2()

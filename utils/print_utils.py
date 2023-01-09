@@ -24,3 +24,6 @@ def print_avg_playtime(df):
 
     # print the resulting list of dictionaries
     print(result)
+
+def print_testing_results(user_id: str, game_title: str, rating: float, predicted_rating: float, loss: float):
+  print(f"user_id: {user_id}, game_title: {game_title}, rating: {rating}, predicted_rating: {predicted_rating}, loss: {loss}")
