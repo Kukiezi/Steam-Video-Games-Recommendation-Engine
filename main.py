@@ -7,6 +7,8 @@ import pandas as pd
 from fuzzywuzzy import fuzz
 from fuzzywuzzy import process
 import difflib
+import random
+import uuid
 
 # plot_utils.plotPerColsumnDistribution(df1, 10, 5)
 
@@ -190,11 +192,51 @@ def is_similarity_above_90(row, left_column, right_column):
     right_value = row[right_column]
     return fuzz.ratio(left_value, right_value) >= 90
 
+
+# def augment_data(df, num_samples):
+#     augmented_data = []
+#     existing_user_game_pairs = set(zip(df['user_id'], df['game_id']))
+#     for i in range(num_samples):
+#         user_id = random.choice(df['user_id'].unique())
+#         game_id = random.choice(df['game_id'].unique())
+#         while (user_id, game_id) in existing_user_game_pairs:
+#             user_id = random.choice(df['user_id'].unique())
+#             game_id = random.choice(df['game_id'].unique())
+#         rating = round(random.uniform(0, 10),1) # rating between 0-10 as float
+#         existing_user_game_pairs.add((user_id, game_id))
+#         augmented_data.append([user_id, game_id, rating])
+#     return pd.DataFrame(augmented_data, columns=['user_id', 'game_id', 'rating'])
+
+def augment_data(df, num_samples):
+    augmented_data = []
+    existing_user_game_pairs = set(zip(df['user_id'], df['game_id']))
+    user_steam_uid = {user_id: steam_uid for user_id, steam_uid in zip(df['user_id'], df['steam_uid'])}
+    game_title = {game_id: title for game_id, title in zip(df['game_id'], df['game_title'])}
+    for i in range(num_samples):
+        user_id = random.choice(df['user_id'].unique())
+        if user_id not in user_steam_uid:
+            user_steam_uid[user_id] = uuid.uuid4()
+        game_id = random.choice(df['game_id'].unique())
+        while (user_id, game_id) in existing_user_game_pairs:
+            user_id = random.choice(df['user_id'].unique())
+            game_id = random.choice(df['game_id'].unique())
+        rating = round(random.uniform(0, 10),1) # rating between 0-10 as float
+        existing_user_game_pairs.add((user_id, game_id))
+        augmented_data.append([user_id, game_id, rating, user_steam_uid[user_id], game_title[game_id]])
+    return pd.DataFrame(augmented_data, columns=['user_id', 'game_id', 'rating', 'steam_uid', 'game_title'])
+
 def main2():
     # print(fuzz.ratio('Counter-Strike Global Offensive', 'Counter-Strike: Global Offensive'))
-    data_frame = pd.read_csv('./data/cleaned_data2.csv', delimiter=',')
+    data_frame = pd.read_csv('./data/augmented.csv', delimiter=',')
     data_frame.dataframeName = 'data'
-    print(data_frame.count())
+    # data_frame = data_frame.rename(columns={'user_id' : 'steam_uid'})
+    
+    # data_frame["game_id"] = pd.factorize(data_frame["game_title"])[0]
+    # data_frame["user_id"] = pd.factorize(data_frame["steam_uid"])[0]
+ 
+    # append the augmented data to the original data
+    data_frame = data_frame.append(augment_data(data_frame, 200000), ignore_index=True)
+    data_frame.to_csv('./data/augmented.csv', index=False)
     # print(data_frame['game_title'].nunique())
 
 if __name__ == '__main__':

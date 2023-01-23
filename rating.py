@@ -6,18 +6,19 @@ import argparse
 import math
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
-from recommendation_model import RecommendationModel
 from training_types import CLIArguments, TrainingData
+from recommendation_model import RecommendationModel
 from utils.print_utils import print_testing_results 
 
 
-NUM_EPOCHS = 50000
+NUM_EPOCHS = 1000
 
 
 def parse_args() -> CLIArguments:
   parser = argparse.ArgumentParser()
   parser.add_argument('--load-model', dest="load_model", action='store_true', help='flag to specify whether to load a saved model')
   parser.add_argument('--save-model', dest="save_model", action='store_true', help='flag to specify whether to save a model')
+  parser.add_argument('--save-test-data', dest="save_test_data", action='store_true', help='flag to specify whether to generate new split of data and save it to .csv files')
   return parser.parse_args()
 
 def encode_categorical_columns(df):
@@ -40,17 +41,49 @@ def convert_to_tensors(data):
   data = torch.from_numpy(data)
   return data
 
+def read_test_data_from_files() -> TrainingData:
+  # Load features_train from a CSV file
+  features_train = pd.read_csv('features_train.csv')
+
+  # Load features_test from a CSV file
+  features_test = pd.read_csv('features_test.csv')
+
+  # Load label_train from a CSV file
+  label_train = pd.read_csv('label_train.csv')
+
+  # Load label_test from a CSV file
+  label_test = pd.read_csv('label_test.csv')
+
+  features_train = convert_to_tensors(features_train)
+  features_test = convert_to_tensors(features_test)
+  label_train = convert_to_tensors(label_train)
+  label_test = convert_to_tensors(label_test)
+
+  return TrainingData(features_train, features_test, label_train, label_test)
+
 
 def split_data(features, label) -> TrainingData:
   # Split your data into training, evaluation, and test sets
-  features_train, features_temp, label_train, label_temp = train_test_split(features, label, test_size=0.3)
-  features_eval, features_test, label_eval, label_test = train_test_split(features_temp, label_temp, test_size=0.4)
+  features_train, features_test, label_train, label_test = train_test_split(features, label, test_size=0.2)
 
   # Reshape the target tensors to have the same shape as the input tensors
+ 
   label_train = label_train.view(-1, 1)
-  label_eval = label_eval.view(-1, 1)
   label_test = label_test.view(-1, 1)
-  return TrainingData(features_train, features_eval, features_test, label_train, label_eval, label_test)
+
+  # Save features_train to a CSV file
+  pd.DataFrame(features_train).to_csv('features_train.csv', index=False)
+
+  # Save features_test to a CSV file
+  pd.DataFrame(features_test).to_csv('features_test.csv', index=False)
+
+  # Save label_train to a CSV file
+  pd.DataFrame(label_train).to_csv('label_train.csv', index=False)
+
+  # Save label_test to a CSV file
+  pd.DataFrame(label_test).to_csv('label_test.csv', index=False)
+
+  return TrainingData(features_train, features_test, label_train, label_test)
 
 def train_model(model, features_train, label_train, loss_fn, optimizer):
   for epoch in range(NUM_EPOCHS):
@@ -76,18 +109,6 @@ def train_model(model, features_train, label_train, loss_fn, optimizer):
       # Zero gradients, perform a backward pass, and update the weights
       loss.backward()
       optimizer.step()
-
-def evaluate_model(model, features_eval, label_eval, loss_fn):
-  with torch.no_grad():
-    label_pred = model(features_eval)
-    # y_pred = torch.clamp(y_pred, 0, 10)
-    # Print the ratings and predictions
-    # print(f'Ratings: {label_eval.numpy()}')
-    # print(f'Predictions: {label_pred.detach().numpy()}')
-
-    eval_loss = loss_fn(label_pred, label_eval)
-    print(f'Evaluation loss: {eval_loss.item():.4f}')
-
 
 def test_model(model, features_test, label_test, loss_fn, game_title_mapping):
   with torch.no_grad():
@@ -126,7 +147,7 @@ def run():
   features, label = get_features_and_label_columns(df)
 
   # Instantiate the model with the appropriate number of features and categories
-  model = RecommendationModel(num_features=features.shape[1], hidden_size=128)
+  model = RecommendationModel(num_features=features.shape[1], hidden_size=64)
 
   # Load existing model weights
   if args.load_model:
@@ -144,15 +165,17 @@ def run():
   features = features.to(model.fc1.weight.dtype)
 
   # Split the data into training, evaluation, and test sets and assign them to invidual variables
-  features_train, features_eval, features_test, label_train, label_eval, label_test = split_data(features, label)
+  if args.save_test_data:
+    features_train, features_test, label_train, label_test = split_data(features, label)
+  else:
+    features_train, features_test, label_train, label_test = read_test_data_from_files()
+  features_train = features_train.to(model.fc1.weight.dtype)
+  features_test = features_test.to(model.fc1.weight.dtype)
 
   iterations_per_epoch = int(math.ceil(len(features_train) // 2000))
 
   if not args.load_model:
     train_model(model, features_train, label_train, loss_fn, optimizer)
-
-  # Evaluate the model
-  evaluate_model(model, features_eval, label_eval, loss_fn)
 
   # Test the model
   test_model(model, features_test, label_test, loss_fn, game_title_mapping)
