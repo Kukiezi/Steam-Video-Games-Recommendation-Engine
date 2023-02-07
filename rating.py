@@ -6,7 +6,7 @@ import argparse
 import math
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
-from training_types import CLIArguments, TrainingData
+from custom_types.training_types import CLIArguments, TrainingData
 from recommendation_model import RecommendationModel
 from utils.print_utils import print_testing_results 
 

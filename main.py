@@ -9,6 +9,7 @@ from fuzzywuzzy import process
 import difflib
 import random
 import uuid
+from sklearn.model_selection import train_test_split
 
 # plot_utils.plotPerColsumnDistribution(df1, 10, 5)
 
@@ -207,27 +208,37 @@ def is_similarity_above_90(row, left_column, right_column):
 #         augmented_data.append([user_id, game_id, rating])
 #     return pd.DataFrame(augmented_data, columns=['user_id', 'game_id', 'rating'])
 
-def augment_data(df, num_samples):
+def augment_data(df):
     augmented_data = []
     existing_user_game_pairs = set(zip(df['user_id'], df['game_id']))
     user_steam_uid = {user_id: steam_uid for user_id, steam_uid in zip(df['user_id'], df['steam_uid'])}
     game_title = {game_id: title for game_id, title in zip(df['game_id'], df['game_title'])}
-    for i in range(num_samples):
-        user_id = random.choice(df['user_id'].unique())
-        if user_id not in user_steam_uid:
-            user_steam_uid[user_id] = uuid.uuid4()
-        game_id = random.choice(df['game_id'].unique())
-        while (user_id, game_id) in existing_user_game_pairs:
-            user_id = random.choice(df['user_id'].unique())
-            game_id = random.choice(df['game_id'].unique())
-        rating = round(random.uniform(0, 10),1) # rating between 0-10 as float
-        existing_user_game_pairs.add((user_id, game_id))
-        augmented_data.append([user_id, game_id, rating, user_steam_uid[user_id], game_title[game_id]])
+    progress = 1
+    total = len(df['steam_uid'].unique())
+    current_largest_user_id = df['user_id'].max()
+    for steam_uid in df['steam_uid'].unique():
+        
+        games = df[df['steam_uid'] == steam_uid][['game_id', 'rating']]
+        num_samples = random.randint(6, 11)
+        for i in range(num_samples):
+            new_user_id = uuid.uuid4()
+            current_largest_user_id += 1
+            print(f"{progress}/{total}")
+            user_id = current_largest_user_id
+            for index, game in games.iterrows():
+                game_id = game['game_id']
+                rating = game['rating']
+                while (new_user_id, game_id) in existing_user_game_pairs:
+                    new_user_id = uuid.uuid4()
+                rating = max(0, min(rating + random.uniform(-1, 1), 10))
+                existing_user_game_pairs.add((new_user_id, game_id))
+                augmented_data.append([user_id, game_id, rating, new_user_id, game_title[game_id]])
+        progress += 1
     return pd.DataFrame(augmented_data, columns=['user_id', 'game_id', 'rating', 'steam_uid', 'game_title'])
 
 def main2():
     # print(fuzz.ratio('Counter-Strike Global Offensive', 'Counter-Strike: Global Offensive'))
-    data_frame = pd.read_csv('./data/augmented.csv', delimiter=',')
+    data_frame = pd.read_csv('./data/cdata3.csv', delimiter=',')
     data_frame.dataframeName = 'data'
     # data_frame = data_frame.rename(columns={'user_id' : 'steam_uid'})
     
@@ -235,9 +246,49 @@ def main2():
     # data_frame["user_id"] = pd.factorize(data_frame["steam_uid"])[0]
  
     # append the augmented data to the original data
-    data_frame = data_frame.append(augment_data(data_frame, 200000), ignore_index=True)
-    data_frame.to_csv('./data/augmented.csv', index=False)
+    data_frame = data_frame.append(augment_data(data_frame), ignore_index=True)
+    data_frame.to_csv('./data/augmented-new.csv', index=False)
     # print(data_frame['game_title'].nunique())
 
+def main3():
+    df = pd.read_csv('./data/augmented-new.csv', delimiter=',')
+    df.dataframeName = 'data'
+    df['rating'] = df['rating'].round()
+    df['rating'] = df['rating'].clip(0, 10)
+    df.to_csv('./data/augmented-rounded.csv', index=False)
+
+def remove_cols_starting_with_category():
+    df = pd.read_csv('./data/augmented-rounded.csv', delimiter=',')
+    df.dataframeName = 'data'
+    new_df = df[["user_id", "game_id", "rating"]]
+    # df = df[[col for col in df.columns if not col.startswith("genre") and not col.startswith("category")]]
+    new_df.to_csv('./data/augmented-rounded2.csv', index=False)
+
+def get_unique_movies_and_genre_to_new_csv():
+    df = pd.read_csv('./data/cdata3.csv', delimiter=',')
+    # df = df[[col for col in df.columns if not col.startswith("genre") and not col.startswith("category")]]
+        # drop duplicates based on game_id
+    df = df.drop_duplicates(subset="game_id")
+
+    # select specific columns
+    df = df[["game_id", "game_title"] + [col for col in df.columns if col.startswith("genre_")]]
+
+    # save dataframe to a new csv file
+    df.to_csv("raw_data/steam_200k/item.csv", index=False)
+
+def split_rating_to_test_and_train():
+    df = pd.read_csv('./data/augmented-rounded2.csv', delimiter=',')
+    train_df, test_df = train_test_split(df, test_size=0.2, random_state=44, shuffle=True)
+      # resetting indices to avoid indexing errors
+    train_df = train_df.reset_index(drop=True)
+    test_df = test_df.reset_index(drop=True)
+
+    #   # Save train_df to a CSV file
+    pd.DataFrame(train_df).to_csv('train_dataset.csv', index=False)
+
+    #   # Save test_df to a CSV file
+    pd.DataFrame(test_df).to_csv('test_dataset.csv', index=False)
+
+
 if __name__ == '__main__':
-    main2()
+    split_rating_to_test_and_train()
