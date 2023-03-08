@@ -398,8 +398,17 @@ def load_official_trainvaltest_split(dataset, testing=False, rating_map=None, po
 
     labels = np.full((num_users, num_items), neutral_rating, dtype=np.int32)
     labels[u_nodes, v_nodes] = np.array([rating_dict[r] for r in ratings])
-
+    test_num = 0
     # for i in range(len(u_nodes)):
+    #     print('_______')
+    #     print(i)
+    #     print(u_nodes[i])
+    #     print(v_nodes[i])
+    #     print(labels[u_nodes[i], v_nodes[i]])
+    #     print(ratings[i])
+    #     print(rating_dict[ratings[i]])
+    #     print('_______')
+
     #     assert(labels[u_nodes[i], v_nodes[i]] == rating_dict[ratings[i]])
 
     labels = labels.reshape([-1])
