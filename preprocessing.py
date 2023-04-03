@@ -358,13 +358,13 @@ def load_official_trainvaltest_split(dataset, testing=False, rating_map=None, po
     filename_test = f"raw_data/{dataset}/test_dataset.csv"
 
     data_train = pd.read_csv(
-        filename_train, header=None,
+        filename_train, header=1,
         names=['u_nodes', 'v_nodes', 'ratings'], dtype=dtypes)
 
     data_test = pd.read_csv(
-        filename_test, header=None,
+        filename_test, header=1,
         names=['u_nodes', 'v_nodes', 'ratings'], dtype=dtypes)
-
+    
     data_array_train = data_train.values.tolist()
     data_array_train = np.array(data_array_train)
     data_array_test = data_test.values.tolist()
@@ -395,21 +395,11 @@ def load_official_trainvaltest_split(dataset, testing=False, rating_map=None, po
 
     # assumes that ratings_train contains at least one example of every rating type
     rating_dict = {r: i for i, r in enumerate(np.sort(np.unique(ratings)).tolist())}
-
     labels = np.full((num_users, num_items), neutral_rating, dtype=np.int32)
     labels[u_nodes, v_nodes] = np.array([rating_dict[r] for r in ratings])
-    test_num = 0
-    # for i in range(len(u_nodes)):
-    #     print('_______')
-    #     print(i)
-    #     print(u_nodes[i])
-    #     print(v_nodes[i])
-    #     print(labels[u_nodes[i], v_nodes[i]])
-    #     print(ratings[i])
-    #     print(rating_dict[ratings[i]])
-    #     print('_______')
 
-    #     assert(labels[u_nodes[i], v_nodes[i]] == rating_dict[ratings[i]])
+    for i in range(len(u_nodes)):
+        assert(labels[u_nodes[i], v_nodes[i]] == rating_dict[ratings[i]])
 
     labels = labels.reshape([-1])
 
@@ -423,8 +413,8 @@ def load_official_trainvaltest_split(dataset, testing=False, rating_map=None, po
     pairs_nonzero = np.array([[u, v] for u, v in zip(u_nodes, v_nodes)])
     idx_nonzero = np.array([u * num_items + v for u, v in pairs_nonzero])
 
-    # for i in range(len(ratings)):
-    #     assert(labels[idx_nonzero[i]] == rating_dict[ratings[i]])
+    for i in range(len(ratings)):
+        assert(labels[idx_nonzero[i]] == rating_dict[ratings[i]])
 
     idx_nonzero_train = idx_nonzero[0:num_train+num_val]
     idx_nonzero_test = idx_nonzero[num_train+num_val:]
@@ -530,61 +520,6 @@ def load_official_trainvaltest_split(dataset, testing=False, rating_map=None, po
         #         u_features[u_dict[u_id], 1] = gender_dict[row['gender']]
         #         # occupation
         #         u_features[u_dict[u_id], occupation_dict[row['occupation']]] = 1.
-
-    elif dataset == 'ml_1m':
-
-        # load movie features
-        movies_file = 'raw_data/' + dataset + '/movies.dat'
-
-        movies_headers = ['movie_id', 'title', 'genre']
-        movies_df = pd.read_csv(movies_file, sep=sep, header=None,
-                                names=movies_headers, engine='python')
-
-        # extracting all genres
-        genres = []
-        for s in movies_df['genre'].values:
-            genres.extend(s.split('|'))
-
-        genres = list(set(genres))
-        num_genres = len(genres)
-
-        genres_dict = {g: idx for idx, g in enumerate(genres)}
-
-        # creating 0 or 1 valued features for all genres
-        v_features = np.zeros((num_items, num_genres), dtype=np.float32)
-        for movie_id, s in zip(movies_df['movie_id'].values.tolist(), movies_df['genre'].values.tolist()):
-            # check if movie_id was listed in ratings file and therefore in mapping dictionary
-            if movie_id in v_dict.keys():
-                gen = s.split('|')
-                for g in gen:
-                    v_features[v_dict[movie_id], genres_dict[g]] = 1.
-
-        # load user features
-        users_file = 'raw_data/' + dataset + '/users.dat'
-        users_headers = ['user_id', 'gender', 'age', 'occupation', 'zip-code']
-        users_df = pd.read_csv(users_file, sep=sep, header=None,
-                               names=users_headers, engine='python')
-
-        # extracting all features
-        cols = users_df.columns.values[1:]
-
-        cntr = 0
-        feat_dicts = []
-        for header in cols:
-            d = dict()
-            feats = np.unique(users_df[header].values).tolist()
-            d.update({f: i for i, f in enumerate(feats, start=cntr)})
-            feat_dicts.append(d)
-            cntr += len(d)
-
-        num_feats = sum(len(d) for d in feat_dicts)
-
-        u_features = np.zeros((num_users, num_feats), dtype=np.float32)
-        for _, row in users_df.iterrows():
-            u_id = row['user_id']
-            if u_id in u_dict.keys():
-                for k, header in enumerate(cols):
-                    u_features[u_dict[u_id], feat_dicts[k][row[header]]] = 1.
     else:
         raise ValueError('Invalid dataset option %s' % dataset)
 
@@ -596,3 +531,170 @@ def load_official_trainvaltest_split(dataset, testing=False, rating_map=None, po
 
     return v_features, rating_mx_train, train_labels, u_train_idx, v_train_idx, \
         val_labels, u_val_idx, v_val_idx, test_labels, u_test_idx, v_test_idx, class_values
+
+def preprocess_data_to_graph(dataset, testing=False, rating_map=None, post_rating_map=None, ratio=1.0):
+    """
+    Loads official train/test split and uses 10% of training samples for validaiton
+    For each split computes 1-of-num_classes labels. Also computes training
+    adjacency matrix. Assumes flattening happens everywhere in row-major fashion.
+    """
+
+    fname = dataset
+    
+    dtypes = {
+        'u_nodes': np.int32, 'v_nodes': np.int32,
+        'ratings': np.float32}
+
+    if ratio < 1.0:
+        data_array = data_array[data_array[:, -1].argsort()[:int(ratio*len(data_array))]]
+
+    u_nodes_ratings = data_array[:, 0].astype(dtypes['u_nodes'])
+    v_nodes_ratings = data_array[:, 1].astype(dtypes['v_nodes'])
+    ratings = data_array[:, 2].astype(dtypes['ratings'])
+
+    if rating_map is not None:
+        for i, x in enumerate(ratings):
+            ratings[i] = rating_map[x]
+
+    u_nodes_ratings, u_dict, num_users = map_data(u_nodes_ratings)
+    v_nodes_ratings, v_dict, num_items = map_data(v_nodes_ratings)
+    
+
+    u_nodes_ratings, v_nodes_ratings = u_nodes_ratings.astype(np.int64), v_nodes_ratings.astype(np.int32)
+    ratings = ratings.astype(np.float64)
+
+    u_nodes = u_nodes_ratings
+    v_nodes = v_nodes_ratings
+
+    neutral_rating = -1  # int(np.ceil(np.float(num_classes)/2.)) - 1
+
+    # assumes that ratings_train contains at least one example of every rating type
+    rating_dict = {r: i for i, r in enumerate(np.sort(np.unique(ratings)).tolist())}
+    labels = np.full((num_users, num_items), neutral_rating, dtype=np.int32)
+    labels[u_nodes, v_nodes] = np.array([rating_dict[r] for r in ratings])
+
+    for i in range(len(u_nodes)):
+        assert(labels[u_nodes[i], v_nodes[i]] == rating_dict[ratings[i]])
+
+    labels = labels.reshape([-1])
+
+    # number of test and validation edges, see cf-nade code
+
+    num_edges = data_array.shape[0]
+
+    pairs_nonzero = np.array([[u, v] for u, v in zip(u_nodes, v_nodes)])
+    idx_nonzero = np.array([u * num_items + v for u, v in pairs_nonzero])
+
+    for i in range(len(ratings)):
+        assert(labels[idx_nonzero[i]] == rating_dict[ratings[i]])
+
+    assert(len(idx_nonzero) == num_edges)
+
+    user_idx, item_idx = pairs_nonzero.transpose()
+
+    # create labels
+    nonzero_labels = labels[idx_nonzero]
+    
+    class_values = np.sort(np.unique(ratings))
+
+    # make training adjacency matrix
+    rating_mx_train = np.zeros(num_users * num_items, dtype=np.float32)
+    if post_rating_map is None:
+        rating_mx_train[idx_nonzero] = labels[idx_nonzero].astype(np.float32) + 1.
+    else:
+        rating_mx_train[idx_nonzero] = np.array([post_rating_map[r] for r in class_values[labels[idx_nonzero]]]) + 1.
+    rating_mx_train = sp.csr_matrix(rating_mx_train.reshape(num_users, num_items))
+
+    if dataset =='steam_200k':
+
+        # movie features (genres)
+        sep = r'|'
+        movie_file = 'raw_data/' + dataset + '/item.csv'
+        movie_headers = ['game id', 'game title', 'Indie', 'Video Production',
+                         'Action', 'Audio Production', 'Design & Illustration', 'Sports', 'Education',
+                         'Web Publishing', 'Sexual Content', 'Gore', 'Racing', 'Violent', 'Adventure',
+                         'Simulation', 'Strategy', 'Nudity', 'Early Access', 'RPG', 'Software Training',
+                         'Casual', 'Game Development', 'Massively Multiplayer', 'Animation & Modeling',
+                         'Utilities', 'Free to Play']
+        movie_df = pd.read_csv(movie_file, sep=',', header=None,
+                               names=movie_headers, engine='python')
+
+        genre_headers = movie_df.columns.values[3:]
+        num_genres = genre_headers.shape[0]
+
+        v_features = np.zeros((num_items, num_genres), dtype=np.float32)
+        for movie_id, g_vec in zip(movie_df['game id'].values.tolist(), movie_df[genre_headers].values.tolist()):
+            # check if movie_id was listed in ratings file and therefore in mapping dictionary
+            if movie_id in v_dict.keys():
+                v_features[v_dict[movie_id], :] = g_vec
+
+    else:
+        raise ValueError('Invalid dataset option %s' % dataset)
+
+    v_features = sp.csr_matrix(v_features)
+
+    print("Item features shape: "+str(v_features.shape))
+
+    return rating_mx_train, nonzero_labels, user_idx, item_idx, v_dict
+
+
+def preprocess_data_to_graph_krzychu(data_array, testing=False, rating_map=None, post_rating_map=None, ratio=1.0, dtypes=None, class_values=None):
+    """
+    Loads official train/test split and uses 10% of training samples for validaiton
+    For each split computes 1-of-num_classes labels. Also computes training
+    adjacency matrix. Assumes flattening happens everywhere in row-major fashion.
+    """
+    if ratio < 1.0:
+        data_array = data_array[data_array[:, -1].argsort()[:int(ratio*len(data_array))]]
+
+    user_nodes_ratings = data_array[:, 0].astype(dtypes['user'])
+    item_nodes_ratings = data_array[:, 1].astype(dtypes['item'])
+    ratings = data_array[:, 2].astype(dtypes['rating'])
+    if rating_map is not None:
+        for i, x in enumerate(ratings):
+            ratings[i] = rating_map[x]
+
+    user_nodes_ratings, user_dict, num_users = map_data(user_nodes_ratings)
+    item_nodes_ratings, item_dict, num_items = map_data(item_nodes_ratings)
+
+    user_nodes_ratings, item_nodes_ratings, ratings = user_nodes_ratings.astype(np.int64), item_nodes_ratings.astype(np.int32), ratings.astype(np.float64)
+
+    neutral_rating = -1  # int(np.ceil(np.float(num_classes)/2.)) - 1
+
+    # assumes that ratings_train contains at least one example of every rating type
+    rating_dict = {r: i for i, r in enumerate(class_values.tolist())}
+
+    labels = np.full((num_users, num_items), neutral_rating, dtype=np.int32)
+    labels[user_nodes_ratings, item_nodes_ratings] = np.array([rating_dict[r] for r in ratings])
+
+    for i in range(len(user_nodes_ratings)):
+        assert(labels[user_nodes_ratings[i], item_nodes_ratings[i]] == rating_dict[ratings[i]])
+
+    labels = labels.reshape([-1])
+
+    # number of test and validation edges, see cf-nade code
+
+    num_edges = data_array.shape[0]
+
+    pairs_nonzero = np.array([[u, v] for u, v in zip(user_nodes_ratings, item_nodes_ratings)])
+    idx_nonzero = np.array([u * num_items + v for u, v in pairs_nonzero])
+
+    for i in range(len(ratings)):
+        assert(labels[idx_nonzero[i]] == rating_dict[ratings[i]])
+
+    assert(len(idx_nonzero) == num_edges)
+
+    user_idx, item_idx = pairs_nonzero.transpose()
+
+    # create labels
+    nonzero_labels = labels[idx_nonzero]
+
+    # make training adjacency matrix
+    rating_mx_train = np.zeros(num_users * num_items, dtype=np.float32)
+    if post_rating_map is None:
+        rating_mx_train[idx_nonzero] = labels[idx_nonzero].astype(np.float32) + 1.
+    else:
+        rating_mx_train[idx_nonzero] = np.array([post_rating_map[r] for r in class_values[labels[idx_nonzero]]]) + 1.
+    rating_mx_train = sp.csr_matrix(rating_mx_train.reshape(num_users, num_items))
+
+    return rating_mx_train, nonzero_labels, user_idx, item_idx, item_dict

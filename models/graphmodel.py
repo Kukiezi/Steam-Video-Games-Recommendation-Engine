@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 from torch_geometric.nn import RGCNConv
+from torch_geometric.utils import dropout_adj
+import torch.nn.functional as F
 
 class IGMC(torch.nn.Module):
     def __init__(self):

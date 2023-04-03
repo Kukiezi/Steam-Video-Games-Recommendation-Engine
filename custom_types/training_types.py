@@ -12,6 +12,7 @@ class CLIArguments(NamedTuple):
   load_model: bool
   save_model: bool
   save_test_data: bool
+  predict: bool
   # Add any other arguments you need here
 
 class TrainingDataMF(NamedTuple):

@@ -1,4 +1,5 @@
 import os
+from gnn_utils import get_games_data
 import utils.plot_utils as plot_utils
 import data_cleaner
 import data_reader
@@ -289,6 +290,34 @@ def split_rating_to_test_and_train():
     #   # Save test_df to a CSV file
     pd.DataFrame(test_df).to_csv('test_dataset.csv', index=False)
 
+def remove_duplicate_pairs():
+    train_df = pd.read_csv('./raw_data/steam_200k/train_dataset.csv', delimiter=',')
+    test_df = pd.read_csv('./raw_data/steam_200k/test_dataset.csv', delimiter=',')
+   
+
+    train_df = pd.read_csv(
+        './raw_data/steam_200k/train_dataset.csv', header=None,
+        names=['user_id', 'game_id', 'ratings'])
+
+    test_df = pd.read_csv(
+        './raw_data/steam_200k/test_dataset.csv', header=None,
+        names=['user_id', 'game_id', 'ratings'])
+    combined_df = pd.concat([train_df, test_df])
+    combined_df = combined_df.drop_duplicates(subset=['user_id', 'game_id'], keep='first')
+    train_df, test_df = train_test_split(combined_df, test_size=0.2, random_state=44, shuffle=True)
+    # Save train_df to a CSV file
+    pd.DataFrame(train_df).to_csv('./raw_data/steam_200kv2/train_dataset.csv', index=False)
+
+    #   # Save test_df to a CSV file
+    pd.DataFrame(test_df).to_csv('./raw_data/steam_200kv2/test_dataset.csv', index=False)
+
+def check_for_duplicates():
+    df = get_games_data('steam_200k')
+    # Check for duplicate game id values
+    duplicates = df.duplicated(subset=['game id'])
+
+    # Print out the duplicated rows
+    print(df[duplicates])
 
 if __name__ == '__main__':
-    split_rating_to_test_and_train()
+    check_for_duplicates()

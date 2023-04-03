@@ -134,6 +134,9 @@ class MyDynamicDataset(Dataset):
 
     def __len__(self):
         return len(self.links[0])
+    
+    def len(self):
+        return len(self.links[0])
 
     def get(self, idx):
         i, j = self.links[0][idx], self.links[1][idx]

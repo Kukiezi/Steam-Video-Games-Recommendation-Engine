@@ -1,12 +1,9 @@
-
-
 def clean_data(data_frame):
     _remove_duplicates_inplace(data_frame)
     data_frame = _drop_redundant_column(data_frame)
     return data_frame
 
 # check for null values
-
 
 def _drop_redundant_column(data_frame):
     # if data_frame name is steam_200k, drop the last column
