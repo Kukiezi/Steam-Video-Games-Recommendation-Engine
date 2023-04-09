@@ -1,3 +1,5 @@
+# this file is trying to implement https://medium.com/coinmonks/how-to-implement-a-recommendation-system-with-deep-learning-and-pytorch-2d40476590f9
+
 from typing import Any, NamedTuple
 import torch
 import torch.nn as nn
@@ -6,17 +8,52 @@ import argparse
 import math
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
-from gnn_utils import get_game_name_by_id, get_games_data
+from cnn_reviews_iterator import ReviewsIterator
+from cnn_utils import get_game_name_by_id, get_games_data
+from models.cnn_embeddings import EmbeddingNet
 from models.model2 import MF
 from custom_types.training_types import CLIArguments, TrainingDataMF as TrainingData
 from utils.print_utils import print_testing_results
 import numpy as np
 import matplotlib.pyplot as plt  # plotting
+import copy
+from torch.optim.lr_scheduler import _LRScheduler
+
+class CyclicLR(_LRScheduler):
+
+    def __init__(self, optimizer, schedule, last_epoch=-1):
+        assert callable(schedule)
+        self.schedule = schedule
+        super().__init__(optimizer, last_epoch)
+
+    def get_lr(self):
+        return [self.schedule(self.last_epoch, lr) for lr in self.base_lrs]
+
 
 # create lists to store the training loss, MAE, and RMSE for each epoch
-loss_list = []
-mae_list = []
-rmse_list = []
+lr = 1e-3
+wd = 1e-5
+bs = 150
+n_epochs = 100
+patience = 10
+no_improvements = 0
+best_loss = np.inf
+best_weights = None
+history = []
+lr_history = []
+
+
+RANDOM_STATE = 1
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+criterion = nn.MSELoss(reduction='sum')
+
+def set_random_seed(state=1):
+    gens = (np.random.seed, torch.manual_seed, torch.cuda.manual_seed)
+    for set_state in gens:
+        set_state(state)
+
+
+set_random_seed(RANDOM_STATE)
 
 
 def parse_args() -> CLIArguments:
@@ -47,26 +84,52 @@ def encode_categorical_columns(df):
 # def train_epocs(model, train_df, loss_fn, epochs=50, lr=1e-3, wd=1e-5):
 
 
-def train_epocs(model, train_df, loss_fn, optimizer, epochs=50):
-    model.train()
-    mae = nn.L1Loss()
-    for i in range(epochs):
-        usernames = torch.LongTensor(train_df.user_id.values)
-        game_titles = torch.LongTensor(train_df.game_id.values)
-        ratings = torch.FloatTensor(train_df.rating.values)
-        y_hat = model(usernames, game_titles)
-        loss = loss_fn(y_hat, ratings)
-        optimizer.zero_grad()  # reset gradient
-        loss.backward()
-        optimizer.step()
-        print(f"{i}: {loss.item()}")
-        RMSE = np.sqrt(loss.item() / len(train_df))
-        print("train RMSE %.3f " % RMSE)
-        mae_loss = mae(y_hat, ratings)
-        print("test MAE %.3f " % mae_loss.item())
-        loss_list.append(loss.item())
-        mae_list.append(mae_loss.item())
-        rmse_list.append(RMSE)
+def train(net, datasets, optimizer, minmax, scheduler, dataset_sizes):
+    for epoch in range(n_epochs):
+        stats = {'epoch': epoch + 1, 'total': n_epochs}
+        
+        for phase in ('train', 'val'):
+            training = phase == 'train'
+            running_loss = 0.0
+            n_batches = 0
+            
+            for batch in batches(*datasets[phase], shuffle=training, bs=bs):
+                x_batch, y_batch = [b.to(device) for b in batch]
+                optimizer.zero_grad()
+            
+                # compute gradients only during 'train' phase
+                with torch.set_grad_enabled(training):
+                    outputs = net(x_batch[:, 0], x_batch[:, 1], minmax)
+                    loss = criterion(outputs, y_batch)
+                    
+                    # don't update weights and rates when in 'val' phase
+                    if training:
+                        scheduler.step()
+                        loss.backward()
+                        optimizer.step()
+                        lr_history.extend(scheduler.get_lr())
+                        
+                running_loss += loss.item()
+                
+            epoch_loss = running_loss / dataset_sizes[phase]
+            stats[phase] = epoch_loss
+            
+            # early stopping: save weights of the best model so far
+            if phase == 'val':
+                if epoch_loss < best_loss:
+                    print('loss improvement on epoch: %d' % (epoch + 1))
+                    best_loss = epoch_loss
+                    best_weights = copy.deepcopy(net.state_dict())
+                    save_model(net, 'net_model.pt')
+                    no_improvements = 0
+                else:
+                    no_improvements += 1
+                    
+        history.append(stats)
+        print('[{epoch:03d}/{total:03d}] train: {train:.4f} - val: {val:.4f}'.format(**stats))
+        if no_improvements >= patience:
+            print('early stopping after epoch {epoch:03d}'.format(**stats))
+            break
 
 
 def test(model, test_df, loss_fn):
@@ -128,7 +191,7 @@ def make_predictions(df, model):
 
     top_game_ids = df['game_id'].unique(
     )[sortedIndices][:10]  # taking top 30
-    
+
     top_game_names = []
     for game_id in top_game_ids:
         game_name = get_game_name_by_id(games_df, game_id)
@@ -165,19 +228,79 @@ def get_largest_user_id(df1, df2):
     return largest_user_id
 
 
+def create_dataset(ratings, top=None):
+    if top is not None:
+        ratings.groupby('user_id')['rating'].count()
+
+    unique_users = ratings.user_id.unique()
+    user_to_index = {old: new for new, old in enumerate(unique_users)}
+    new_users = ratings.user_id.map(user_to_index)
+
+    unique_games = ratings.game_id.unique()
+    game_to_index = {old: new for new, old in enumerate(unique_games)}
+    new_games = ratings.game_id.map(game_to_index)
+
+    n_users = unique_users.shape[0]
+    n_movies = unique_games.shape[0]
+    X = pd.DataFrame({'user_id': new_users, 'game_id': new_games})
+    y = ratings['rating'].astype(np.float32)
+    return (n_users, n_movies), (X, y), (user_to_index, game_to_index)
+
+
+def batches(X, y, bs=32, shuffle=True):
+    for xb, yb in ReviewsIterator(X, y, bs, shuffle):
+        xb = torch.LongTensor(xb)
+        yb = torch.FloatTensor(yb)
+        yield xb, yb.view(-1, 1)
+
+def cosine(t_max, eta_min=0):
+    
+    def scheduler(epoch, base_lr):
+        t = epoch % t_max
+        return eta_min + (base_lr - eta_min)*(1 + math.cos(math.pi*t/t_max))/2
+    
+    return scheduler
+
 def run():
     args = parse_args()
 
-    df = pd.read_csv('./data/augmented-rounded.csv', delimiter=',')
-    # game_title_categories  = encode_categorical_columns(df)
-    # game_title_mapping = {i: game_title_categories[i] for i in range(len(game_title_categories))}
-    # unique_user_count = df['user_id'].nunique()
-    # unique_game_count = df['game_id'].nunique()
-    # train_df, test_df = train_test_split(df, test_size=0.2, random_state=44, shuffle=True)
+    # df = pd.read_csv('./data/augmented-rounded.csv', delimiter=',')
 
-    # train_df, test_df = split_data(df)
     train_df, test_df = get_datasets_dataframes()
+    games_df = get_games_data('steam_200k')
+    df = pd.concat([train_df, test_df])
+    (n, m), (X, y), _ = create_dataset(df)
+    # print(f'Embeddings: {n} users, {m} movies')
+    # print(f'Dataset shape: {X.shape}')
+    # print(f'Target shape: {y.shape}')
+    # for x_batch, y_batch in batches(X, y, bs=4):
+    #     print(x_batch)
+    #     print(y_batch)
+    #     break
+
+    X_train, X_valid, y_train, y_valid = train_test_split(
+        X, y, test_size=0.2, random_state=RANDOM_STATE)
+    datasets = {'train': (X_train, y_train), 'val': (X_valid, y_valid)}
+    dataset_sizes = {'train': len(X_train), 'val': len(X_valid)}
+
+    minmax = df.rating.min().astype(float), df.rating.max().astype(float)
+    
+    # net = EmbeddingNet(
+    #     n_users=n, n_movies=m,
+    #     n_factors=150, hidden=[500, 500, 500],
+    #     embedding_dropout=0.05, dropouts=[0.5, 0.5, 0.25])
+    
+    net = EmbeddingNet(n, m, n_factors=150, hidden=[100, 200, 300], dropouts=[0.25, 0.5])
+    
+    net.to(device)
+    optimizer = torch.optim.Adam(net.parameters(), lr=lr, weight_decay=wd)
+    iterations_per_epoch = int(math.ceil(dataset_sizes['train'] // bs))
+    scheduler = CyclicLR(optimizer, cosine(t_max=iterations_per_epoch * 2, eta_min=lr/10))
+    train(net=net, datasets=datasets, optimizer=optimizer, minmax=minmax, scheduler=scheduler, dataset_sizes=dataset_sizes)
+    
+    return
     unique_user_count, unique_game_count = get_unique_counts(train_df, test_df)
+
     # Instantiate the model with the appropriate number of features and categories
     model = MF(unique_user_count, unique_game_count, 100)
 
@@ -205,14 +328,9 @@ def run():
         save_model(model, args.save_model_name)
 
     # make_predictions(df, model)
-    plt.plot(loss_list, label='loss')
-    plt.plot(mae_list, label='MAE')
-    plt.plot(rmse_list, label='RMSE')
-    plt.xlabel('Epoch')
-    plt.ylabel('Metric Value')
-    plt.legend()
-    plt.show()
 
 
 if __name__ == "__main__":
     run()
+
+
