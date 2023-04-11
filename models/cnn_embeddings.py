@@ -37,7 +37,6 @@ class EmbeddingNet(nn.Module):
         hidden = get_list(hidden)
         dropouts = get_list(dropouts)
         n_last = hidden[-1]
-        
         def gen_layers(n_in):
             """
             A generator that yields a sequence of hidden layers and 
@@ -55,7 +54,7 @@ class EmbeddingNet(nn.Module):
                 if rate is not None and rate > 0.:
                     yield nn.Dropout(rate)
                 n_in = n_out
-            
+ 
         self.u = nn.Embedding(n_users, n_factors)
         self.m = nn.Embedding(n_movies, n_factors)
         self.drop = nn.Dropout(embedding_dropout)
@@ -66,8 +65,7 @@ class EmbeddingNet(nn.Module):
     def forward(self, users, movies, minmax=None):
         users = self.u(users)
         movies = self.m(movies)
- 
-        features = torch.cat([self.u(users.long()), self.m(movies.long())], dim=1)
+        features = torch.cat([users, movies], dim=1)
         x = self.drop(features)
         x = self.hidden(x)
         out = torch.sigmoid(self.fc(x))

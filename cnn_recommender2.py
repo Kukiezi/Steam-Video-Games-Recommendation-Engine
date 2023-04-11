@@ -85,6 +85,7 @@ def encode_categorical_columns(df):
 
 
 def train(net, datasets, optimizer, minmax, scheduler, dataset_sizes):
+    global best_loss
     for epoch in range(n_epochs):
         stats = {'epoch': epoch + 1, 'total': n_epochs}
         
@@ -92,14 +93,13 @@ def train(net, datasets, optimizer, minmax, scheduler, dataset_sizes):
             training = phase == 'train'
             running_loss = 0.0
             n_batches = 0
-            
             for batch in batches(*datasets[phase], shuffle=training, bs=bs):
                 x_batch, y_batch = [b.to(device) for b in batch]
                 optimizer.zero_grad()
             
                 # compute gradients only during 'train' phase
                 with torch.set_grad_enabled(training):
-                    outputs = net(x_batch[:, 0], x_batch[:, 1], minmax)
+                    outputs = net(x_batch[:, 1], x_batch[:, 0], minmax)
                     loss = criterion(outputs, y_batch)
                     
                     # don't update weights and rates when in 'val' phase
@@ -120,7 +120,7 @@ def train(net, datasets, optimizer, minmax, scheduler, dataset_sizes):
                     print('loss improvement on epoch: %d' % (epoch + 1))
                     best_loss = epoch_loss
                     best_weights = copy.deepcopy(net.state_dict())
-                    save_model(net, 'net_model.pt')
+                    save_model(net, 'net_model1.pt')
                     no_improvements = 0
                 else:
                     no_improvements += 1
@@ -183,21 +183,25 @@ def load_existing_model(model, path):
 
 def make_predictions(df, model):
     games_df = get_games_data('steam_200k')
-    user = torch.tensor([107468])
-    games = torch.tensor(df['game_id'].unique().tolist(), dtype=torch.long)
+    user = torch.tensor([100])
+    # games = torch.tensor(df['game_id'].unique().tolist(), dtype=torch.long)
+    games = torch.tensor([4000])
     predictions = model(user, games)
 
+    print(predictions)
+    print(predictions.detach().numpy())
+    return
     sortedIndices = predictions.detach().numpy().argsort()
-
+    print(sortedIndices)
     top_game_ids = df['game_id'].unique(
-    )[sortedIndices][:10]  # taking top 30
+    )[[sortedIndices]][:10]  # taking top 30
 
-    top_game_names = []
-    for game_id in top_game_ids:
-        game_name = get_game_name_by_id(games_df, game_id)
-        top_game_names.append(game_name)
+    # top_game_names = []
+    # for game_id in top_game_ids:
+    #     game_name = get_game_name_by_id(games_df, game_id)
+    #     top_game_names.append(game_name)
 
-    print(top_game_names)
+    print(top_game_ids)
 
 
 def get_datasets_dataframes():
@@ -270,13 +274,7 @@ def run():
     games_df = get_games_data('steam_200k')
     df = pd.concat([train_df, test_df])
     (n, m), (X, y), _ = create_dataset(df)
-    # print(f'Embeddings: {n} users, {m} movies')
-    # print(f'Dataset shape: {X.shape}')
-    # print(f'Target shape: {y.shape}')
-    # for x_batch, y_batch in batches(X, y, bs=4):
-    #     print(x_batch)
-    #     print(y_batch)
-    #     break
+
 
     X_train, X_valid, y_train, y_valid = train_test_split(
         X, y, test_size=0.2, random_state=RANDOM_STATE)
@@ -285,49 +283,32 @@ def run():
 
     minmax = df.rating.min().astype(float), df.rating.max().astype(float)
     
-    # net = EmbeddingNet(
-    #     n_users=n, n_movies=m,
-    #     n_factors=150, hidden=[500, 500, 500],
-    #     embedding_dropout=0.05, dropouts=[0.5, 0.5, 0.25])
+    # Instantiate the model with the appropriate number of features and categories
+    net = EmbeddingNet(
+        n_users=m, n_movies=n,
+        n_factors=150, hidden=[500, 500, 500],
+        embedding_dropout=0.05, dropouts=[0.5, 0.5, 0.25])
     
-    net = EmbeddingNet(n, m, n_factors=150, hidden=[100, 200, 300], dropouts=[0.25, 0.5])
+    # Load existing model weights
+    if args.load_model or args.predict:
+        load_existing_model(net, 'trained_models/net_model.pt')
     
     net.to(device)
     optimizer = torch.optim.Adam(net.parameters(), lr=lr, weight_decay=wd)
     iterations_per_epoch = int(math.ceil(dataset_sizes['train'] // bs))
     scheduler = CyclicLR(optimizer, cosine(t_max=iterations_per_epoch * 2, eta_min=lr/10))
-    train(net=net, datasets=datasets, optimizer=optimizer, minmax=minmax, scheduler=scheduler, dataset_sizes=dataset_sizes)
-    
-    return
-    unique_user_count, unique_game_count = get_unique_counts(train_df, test_df)
+    if not args.load_model and not args.predict:
+        train(net=net, datasets=datasets, optimizer=optimizer, minmax=minmax, scheduler=scheduler, dataset_sizes=dataset_sizes)
 
-    # Instantiate the model with the appropriate number of features and categories
-    model = MF(unique_user_count, unique_game_count, 100)
-
-    # Load existing model weights
-    if args.load_model or args.predict:
-        load_existing_model(model, 'trained_models/cnn_100epochs.pt')
-
+     
     if args.predict:
-        make_predictions(df, model)
-        return
-
-    # Define a loss function and an optimizer
-    loss_fn = nn.MSELoss()
-    optimizer = torch.optim.Adam(
-        model.parameters(), lr=0.01, weight_decay=0.0001)
-
-    if not args.load_model:
-        train_epocs(model, loss_fn=loss_fn, train_df=train_df,
-                    optimizer=optimizer, epochs=100)
-
-    test(model, loss_fn=loss_fn, test_df=test_df)
+        make_predictions(df, net)
 
     # Save the model if specified and not loading existing model
     if args.save_model and not args.load_model:
-        save_model(model, args.save_model_name)
+        save_model(net, args.save_model_name)
 
-    # make_predictions(df, model)
+    return
 
 
 if __name__ == "__main__":
