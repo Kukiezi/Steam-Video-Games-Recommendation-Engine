@@ -120,7 +120,7 @@ def train(net, datasets, optimizer, minmax, scheduler, dataset_sizes):
                     print('loss improvement on epoch: %d' % (epoch + 1))
                     best_loss = epoch_loss
                     best_weights = copy.deepcopy(net.state_dict())
-                    save_model(net, 'net_model1.pt')
+                    save_model(net, 'net_model3')
                     no_improvements = 0
                 else:
                     no_improvements += 1
@@ -205,20 +205,25 @@ def make_predictions(df, model):
 
 
 def get_datasets_dataframes():
-    filename_train = f"raw_data/steam_200k/train_dataset.csv"
-    filename_test = f"raw_data/steam_200k/test_dataset.csv"
+    filename_train = f"data/steam_200k/train_dataset.csv"
+    filename_test = f"data/steam_200k/test_dataset.csv"
+    filename_test = f"data/steam_200k/eval_dataset.csv"
     dtypes = {
         'u_nodes': np.int32, 'v_nodes': np.int32,
         'ratings': np.float32}
     data_train = pd.read_csv(
         filename_train, header=1,
         names=['user_id', 'game_id', 'rating'], dtype=dtypes)
-
+ 
     data_test = pd.read_csv(
         filename_test, header=1,
         names=['user_id', 'game_id', 'rating'], dtype=dtypes)
-
-    return (data_train, data_test)
+    
+    data_eval = pd.read_csv(
+        filename_test, header=1,
+        names=['user_id', 'game_id', 'rating'], dtype=dtypes)
+ 
+    return (data_train, data_test, data_eval)
 
 
 def get_unique_counts(df1, df2):
@@ -250,6 +255,21 @@ def create_dataset(ratings, top=None):
     y = ratings['rating'].astype(np.float32)
     return (n_users, n_movies), (X, y), (user_to_index, game_to_index)
 
+def create_dataset2(ratings, top=None):
+    if top is not None:
+        ratings.groupby('user_id')['rating'].count()
+ 
+    unique_users = ratings.user_id.unique()
+    user_to_index = {old: new for new, old in enumerate(unique_users)}
+    new_users = ratings.user_id.map(user_to_index)
+ 
+    unique_games = ratings.game_id.unique()
+    game_to_index = {old: new for new, old in enumerate(unique_games)}
+    new_games = ratings.game_id.map(game_to_index)
+ 
+    X = pd.DataFrame({'user_id': new_users, 'game_id': new_games})
+    y = ratings['rating'].astype(np.float32)
+    return (X, y)
 
 def batches(X, y, bs=32, shuffle=True):
     for xb, yb in ReviewsIterator(X, y, bs, shuffle):
@@ -270,16 +290,18 @@ def run():
 
     # df = pd.read_csv('./data/augmented-rounded.csv', delimiter=',')
 
-    train_df, test_df = get_datasets_dataframes()
+    train_df, test_df, eval_df = get_datasets_dataframes()
     games_df = get_games_data('steam_200k')
     df = pd.concat([train_df, test_df])
     (n, m), (X, y), _ = create_dataset(df)
 
 
-    X_train, X_valid, y_train, y_valid = train_test_split(
-        X, y, test_size=0.2, random_state=RANDOM_STATE)
-    datasets = {'train': (X_train, y_train), 'val': (X_valid, y_valid)}
-    dataset_sizes = {'train': len(X_train), 'val': len(X_valid)}
+    # X_train, X_valid, y_train, y_valid = train_test_split(
+    #     X, y, test_size=0.2, random_state=RANDOM_STATE)
+    train_dataset, train_ratings = create_dataset2(train_df)
+    eval_dataset, eval_ratings = create_dataset2(train_df)
+    datasets = {'train': (train_dataset, train_ratings), 'val': (eval_dataset, eval_ratings)}
+    dataset_sizes = {'train': len(train_dataset), 'val': len(eval_dataset)}
 
     minmax = df.rating.min().astype(float), df.rating.max().astype(float)
     
