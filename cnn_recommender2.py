@@ -132,13 +132,13 @@ def train(net, datasets, optimizer, minmax, scheduler, dataset_sizes):
             break
 
 
-def test(model, test_df, loss_fn):
+def test(model, test_df):
     model.eval()
     usernames = torch.LongTensor(test_df.user_id.values)
     game_titles = torch.LongTensor(test_df.game_id.values)
     ratings = torch.FloatTensor(test_df.rating.values)
     y_hat = model(usernames, game_titles)
-    loss = loss_fn(y_hat, ratings)
+    loss = criterion(y_hat, ratings)
     mae = nn.L1Loss()
     # for i, row in test_df.iterrows():
     #     user_id = row['user_id']
@@ -205,9 +205,9 @@ def make_predictions(df, model):
 
 
 def get_datasets_dataframes():
-    filename_train = f"data/steam_200k/train_dataset.csv"
-    filename_test = f"data/steam_200k/test_dataset.csv"
-    filename_test = f"data/steam_200k/eval_dataset.csv"
+    filename_train = f"data/steam/train_dataset.csv"
+    filename_test = f"data/steam/test_dataset.csv"
+    filename_test = f"data/steam/val_dataset.csv"
     dtypes = {
         'u_nodes': np.int32, 'v_nodes': np.int32,
         'ratings': np.float32}
@@ -299,7 +299,7 @@ def run():
     # X_train, X_valid, y_train, y_valid = train_test_split(
     #     X, y, test_size=0.2, random_state=RANDOM_STATE)
     train_dataset, train_ratings = create_dataset2(train_df)
-    eval_dataset, eval_ratings = create_dataset2(train_df)
+    eval_dataset, eval_ratings = create_dataset2(eval_df)
     datasets = {'train': (train_dataset, train_ratings), 'val': (eval_dataset, eval_ratings)}
     dataset_sizes = {'train': len(train_dataset), 'val': len(eval_dataset)}
 
@@ -324,7 +324,7 @@ def run():
 
      
     if args.predict:
-        make_predictions(df, net)
+        test(net, test_df, minmax)
 
     # Save the model if specified and not loading existing model
     if args.save_model and not args.load_model:

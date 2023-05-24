@@ -354,8 +354,8 @@ def load_official_trainvaltest_split(dataset, testing=False, rating_map=None, po
         'u_nodes': np.int32, 'v_nodes': np.int32,
         'ratings': np.float32}
 
-    filename_train = f"raw_data/{dataset}/train_dataset.csv"
-    filename_test = f"raw_data/{dataset}/test_dataset.csv"
+    filename_train = f"data/steam/train_dataset.csv"
+    filename_test = f"data/steam/test_dataset.csv"
 
     data_train = pd.read_csv(
         filename_train, header=1,
