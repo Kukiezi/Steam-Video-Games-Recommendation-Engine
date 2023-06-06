@@ -11,6 +11,7 @@ from sklearn.preprocessing import LabelEncoder
 from cnn_reviews_iterator import ReviewsIterator
 from cnn_utils import get_game_name_by_id, get_games_data
 from models.cnn_embeddings import EmbeddingNet
+from models.cnn_embeddings import ConvEmbeddingNet
 from models.model2 import MF
 from custom_types.training_types import CLIArguments, TrainingDataMF as TrainingData
 from utils.print_utils import print_testing_results
@@ -31,18 +32,21 @@ class CyclicLR(_LRScheduler):
 
 
 # create lists to store the training loss, MAE, and RMSE for each epoch
-lr = 1e-3
-wd = 1e-5
-bs = 150
+lr = 1e-6
+wd = 1e-4
+bs = 400
 n_epochs = 100
-patience = 10
+patience = 100
 no_improvements = 0
 best_loss = np.inf
 best_weights = None
 history = []
 lr_history = []
-
-
+use_scheduler = False
+train_accuracy_list = []
+val_accuracy_list = []
+loss_through_epochs = []
+val_loss_through_epochs = []
 RANDOM_STATE = 1
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 criterion = nn.MSELoss(reduction='sum')
@@ -86,6 +90,7 @@ def encode_categorical_columns(df):
 
 def train(net, datasets, optimizer, minmax, scheduler, dataset_sizes):
     global best_loss
+    global no_improvements
     for epoch in range(n_epochs):
         stats = {'epoch': epoch + 1, 'total': n_epochs}
         
@@ -99,31 +104,38 @@ def train(net, datasets, optimizer, minmax, scheduler, dataset_sizes):
             
                 # compute gradients only during 'train' phase
                 with torch.set_grad_enabled(training):
-                    outputs = net(x_batch[:, 1], x_batch[:, 0], minmax)
+                    outputs = net(x_batch[:, 0], x_batch[:, 1], minmax)
                     loss = criterion(outputs, y_batch)
                     
                     # don't update weights and rates when in 'val' phase
                     if training:
-                        scheduler.step()
+                        if use_scheduler:
+                            scheduler.step()
                         loss.backward()
                         optimizer.step()
-                        lr_history.extend(scheduler.get_lr())
+                        if use_scheduler:
+                            lr_history.extend(scheduler.get_lr())
                         
                 running_loss += loss.item()
                 
             epoch_loss = running_loss / dataset_sizes[phase]
+            if phase == 'train':
+                loss_through_epochs.append(epoch_loss)
             stats[phase] = epoch_loss
             
             # early stopping: save weights of the best model so far
             if phase == 'val':
+                val_loss_through_epochs.append(epoch_loss)
                 if epoch_loss < best_loss:
                     print('loss improvement on epoch: %d' % (epoch + 1))
                     best_loss = epoch_loss
                     best_weights = copy.deepcopy(net.state_dict())
-                    save_model(net, 'net_model3')
+                    save_model(net, f"epoch_{epoch}_loss_{epoch_loss}")
+                    save_metrics_to_csv()
                     no_improvements = 0
                 else:
                     no_improvements += 1
+                    save_model(net, f"epoch_{epoch}_loss_{epoch_loss}")
                     
         history.append(stats)
         print('[{epoch:03d}/{total:03d}] train: {train:.4f} - val: {val:.4f}'.format(**stats))
@@ -132,28 +144,40 @@ def train(net, datasets, optimizer, minmax, scheduler, dataset_sizes):
             break
 
 
-def test(model, test_df):
+def test(model, datasets, dataset_sizes):
     model.eval()
-    usernames = torch.LongTensor(test_df.user_id.values)
-    game_titles = torch.LongTensor(test_df.game_id.values)
-    ratings = torch.FloatTensor(test_df.rating.values)
-    y_hat = model(usernames, game_titles)
-    loss = criterion(y_hat, ratings)
-    mae = nn.L1Loss()
-    # for i, row in test_df.iterrows():
-    #     user_id = row['user_id']
-    #     game_title = row['game_title']
-    #     rating = row['rating']
-    #     predicted_rating = y_hat[i]
-    #     print_testing_results(user_id, game_title, rating,
-    #                           predicted_rating, loss)
+    running_loss = 0.0
+    train_correct = 0
+    train_total = 0
+    for batch in batches(*datasets['test'], bs=bs):
+        x_batch, y_batch = [b.to(device) for b in batch]
+        outputs = model(x_batch[:, 0], x_batch[:, 1])
+        loss = criterion(outputs, y_batch)
+        running_loss += loss.item()
 
-    print("test loss %.3f " % loss.item())
-    RMSE = np.sqrt(loss.item() / len(test_df))
-    print("test RMSE %.3f " % RMSE)
-    mae_loss = mae(y_hat, ratings)
-    print("test MAE %.3f " % mae_loss.item())
+        y_true = y_batch.round()
+        train_pred_labels = outputs.round()
+        train_correct += (train_pred_labels == y_true).sum().item()
+        train_total += y_true.numel()
+    
 
+    train_accuracy = train_correct / train_total
+    epoch_loss = running_loss / dataset_sizes['test']
+    print(f"Test loss (MSE): {epoch_loss}, Test accuracy: {train_accuracy}")
+
+def save_metrics_to_csv():
+    # Create a dataframe to store the data
+    metrics_df = pd.DataFrame({
+        'Train Loss': loss_through_epochs,
+        'Val Loss': val_loss_through_epochs,
+        # 'Train Accuracy': train_accuracy_list,
+        # 'Val Accuracy': val_accuracy_list
+    })
+
+    # Save the dataframe to a CSV file
+    metrics_df.to_csv('cnn_performance_metrics.csv', index=False)
+
+    print('Performance metrics saved to cnn_performance_metrics.csv.')
 
 def split_data(df) -> TrainingData:
     # Split your data into training and testing
@@ -170,10 +194,10 @@ def split_data(df) -> TrainingData:
 def save_model(model, name):
     # Save the model
     if name is None:
-        torch.save(model.state_dict(), "trained_models/cnnmodel.pt")
+        torch.save(model.state_dict(), "trained_models/cnn2/cnnmodel.pt")
         return
 
-    torch.save(model.state_dict(), f"trained_models/{name}.pt")
+    torch.save(model.state_dict(), f"trained_models/cnn2/{name}.pt")
 
 
 def load_existing_model(model, path):
@@ -207,10 +231,11 @@ def make_predictions(df, model):
 def get_datasets_dataframes():
     filename_train = f"data/steam/train_dataset.csv"
     filename_test = f"data/steam/test_dataset.csv"
-    filename_test = f"data/steam/val_dataset.csv"
+    filename_val = f"data/steam/val_dataset.csv"
+
     dtypes = {
-        'u_nodes': np.int32, 'v_nodes': np.int32,
-        'ratings': np.float32}
+        'user_id': np.int32, 'game_id': np.int32,
+        'rating': np.float32}
     data_train = pd.read_csv(
         filename_train, header=1,
         names=['user_id', 'game_id', 'rating'], dtype=dtypes)
@@ -219,11 +244,11 @@ def get_datasets_dataframes():
         filename_test, header=1,
         names=['user_id', 'game_id', 'rating'], dtype=dtypes)
     
-    data_eval = pd.read_csv(
-        filename_test, header=1,
+    data_val = pd.read_csv(
+        filename_val, header=1,
         names=['user_id', 'game_id', 'rating'], dtype=dtypes)
  
-    return (data_train, data_test, data_eval)
+    return (data_train, data_test, data_val)
 
 
 def get_unique_counts(df1, df2):
@@ -250,10 +275,10 @@ def create_dataset(ratings, top=None):
     new_games = ratings.game_id.map(game_to_index)
 
     n_users = unique_users.shape[0]
-    n_movies = unique_games.shape[0]
+    n_games = unique_games.shape[0]
     X = pd.DataFrame({'user_id': new_users, 'game_id': new_games})
     y = ratings['rating'].astype(np.float32)
-    return (n_users, n_movies), (X, y), (user_to_index, game_to_index)
+    return (n_users, n_games), (X, y), (user_to_index, game_to_index)
 
 def create_dataset2(ratings, top=None):
     if top is not None:
@@ -290,30 +315,33 @@ def run():
 
     # df = pd.read_csv('./data/augmented-rounded.csv', delimiter=',')
 
-    train_df, test_df, eval_df = get_datasets_dataframes()
-    games_df = get_games_data('steam_200k')
-    df = pd.concat([train_df, test_df])
-    (n, m), (X, y), _ = create_dataset(df)
+    train_df, test_df, val_df = get_datasets_dataframes()
+    df = pd.concat([train_df, val_df])
+    (n_users, n_games), (dataset, ratings), _ = create_dataset(df)
+    train_dataset = dataset[:len(train_df)]
+    train_ratings = ratings[:len(train_df)]
+    val_dataset = dataset[len(train_df):len(train_df)+len(val_df)]
+    val_ratings = ratings[len(train_df):len(train_df)+len(val_df)]
+    test_dataset = dataset[len(train_df)+len(val_df):]
+    test_ratings = ratings[len(train_df)+len(val_df):]
 
-
-    # X_train, X_valid, y_train, y_valid = train_test_split(
-    #     X, y, test_size=0.2, random_state=RANDOM_STATE)
-    train_dataset, train_ratings = create_dataset2(train_df)
-    eval_dataset, eval_ratings = create_dataset2(eval_df)
-    datasets = {'train': (train_dataset, train_ratings), 'val': (eval_dataset, eval_ratings)}
-    dataset_sizes = {'train': len(train_dataset), 'val': len(eval_dataset)}
+    # train_dataset, val_dataset, train_ratings, val_ratings = train_test_split(dataset, ratings, test_size=0.2, random_state=RANDOM_STATE)
+    # train_dataset, train_ratings = create_dataset2(train_df)
+    # val_dataset, val_ratings = create_dataset2(val_df)
+    datasets = {'train': (train_dataset, train_ratings), 'val': (val_dataset, val_ratings)}
+    dataset_sizes = {'train': len(train_dataset), 'val': len(val_dataset)}
 
     minmax = df.rating.min().astype(float), df.rating.max().astype(float)
-    
+    # minmax = train_ratings.min(), train_ratings.max()
     # Instantiate the model with the appropriate number of features and categories
     net = EmbeddingNet(
-        n_users=m, n_movies=n,
-        n_factors=150, hidden=[500, 500, 500],
-        embedding_dropout=0.05, dropouts=[0.5, 0.5, 0.25])
+        n_users=n_users, n_games=n_games,
+        n_factors=1000, hidden=[200, 200],
+        embedding_dropout=0.05, dropouts=[0.5, 0.5])
     
     # Load existing model weights
     if args.load_model or args.predict:
-        load_existing_model(net, 'trained_models/net_model.pt')
+        load_existing_model(net, 'trained_models/cnn/epoch_73_loss_1.7103050363451975.pt')
     
     net.to(device)
     optimizer = torch.optim.Adam(net.parameters(), lr=lr, weight_decay=wd)
@@ -322,9 +350,12 @@ def run():
     if not args.load_model and not args.predict:
         train(net=net, datasets=datasets, optimizer=optimizer, minmax=minmax, scheduler=scheduler, dataset_sizes=dataset_sizes)
 
-     
     if args.predict:
-        test(net, test_df, minmax)
+        (n_users, n_games), (test_dataset, test_ratings), _ = create_dataset(val_df)
+        datasets = {'test': (test_dataset, test_ratings)}
+        dataset_sizes = {'test': len(test_dataset)}
+        print(dataset_sizes)
+        test(net, datasets, dataset_sizes)
 
     # Save the model if specified and not loading existing model
     if args.save_model and not args.load_model:

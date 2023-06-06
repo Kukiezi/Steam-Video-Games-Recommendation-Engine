@@ -24,7 +24,6 @@ LR_DECAY_STEP = 20
 WD = 1e-5
 LR_DECAY_VALUE = 10
 train_accuracy_list = []
-train_val_accuracy_list = []
 val_accuracy_list = []
 loss_through_epochs = []
 val_loss_through_epochs = []
@@ -43,7 +42,6 @@ def parse_args() -> CLIArguments:
     parser.add_argument('--save-test-data', dest="save_test_data", action='store_true',
                         help='flag to specify whether to generate new split of data and save it to .csv files')
     return parser.parse_args()
-
 
 def compute_accuracy(predictions, targets):
     # Assuming predictions and targets are tensors or numpy arrays
@@ -291,10 +289,10 @@ def save_metrics_to_csv():
 def save_model(model, name):
     # Save the model
     if name is None:
-        torch.save(model.state_dict(), "trained_models/gnn2/gnn_model.pt")
+        torch.save(model.state_dict(), "trained_models/gnn3/gnn_model.pt")
         return
 
-    torch.save(model.state_dict(), f"trained_models/gnn2/{name}.pt")
+    torch.save(model.state_dict(), f"trained_models/gnn3/{name}.pt")
 
 def main():
     args = parse_args()
@@ -310,8 +308,8 @@ def main():
     model = IGMC()
 
     # Load existing model weights
-    # if args.load_model or args.predict:
-        # model.load_state_dict(torch.load("trained_models/gnn/epoch_7_loss_1.072769907117512.pt.pt"))
+    if args.load_model or args.predict:
+        model.load_state_dict(torch.load("trained_models/gnn2/epoch_41_loss_1.0357771004456886.pt"))
 
     opt = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=WD)
     (v_features, adj_train, train_labels, train_u_indices, train_v_indices, val_labels, 
